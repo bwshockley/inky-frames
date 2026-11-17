@@ -1,0 +1,289 @@
+// Build-time configuration for the Inky Frame Tesserae client (4.0", 5.7", 7.3").
+//
+// Wi-Fi and the server are entered in the setup portal and kept in flash
+// (settings.c). include/secrets.h (git-ignored, optional) seeds them on first
+// boot so a development build can skip the portal.
+#pragma once
+
+#if __has_include("secrets.h")
+#include "secrets.h"
+#endif
+#include "version.h"
+
+#ifndef WIFI_SSID
+#define WIFI_SSID            ""
+#endif
+#ifndef WIFI_PASS
+#define WIFI_PASS            ""
+#endif
+#ifndef TESSERAE_SERVER_URL
+#define TESSERAE_SERVER_URL  ""
+#endif
+#ifndef TESSERAE_FALLBACK_IP
+#define TESSERAE_FALLBACK_IP ""
+#endif
+#ifndef TESSERAE_PAIRING_CODE
+#define TESSERAE_PAIRING_CODE ""
+#endif
+
+// ---- panel variant ----------------------------------------------------------
+// Three Inky Frame sizes are supported: 4.0", 5.7" and 7.3". All share the
+// same pins; the variant decides the geometry, the kind/gamut announced and
+// the panel init sequence.
+//   PANEL_4           4.0" 640x400, 7-colour ACeP (UC8159).
+//   PANEL_57          5.7" 600x448, 7-colour ACeP (UC8159).
+//   PANEL_73_ACEP     7.3" 800x480, 7-colour ACeP (AC073TC1A): black, white,
+//                     green, blue, red, yellow, orange. Sold before Sept 2025.
+//   PANEL_73_SPECTRA  7.3" 800x480, Spectra 6 (E673): black, white, yellow,
+//                     red, blue, green. Shipped from September 2025.
+// The server packs palette indices in the panel's own order for the declared
+// gamut.
+#define PANEL_4             1
+#define PANEL_57            2
+#define PANEL_73_ACEP       3
+#define PANEL_73_SPECTRA    4
+#ifndef PANEL_VARIANT
+#define PANEL_VARIANT  PANEL_73_ACEP
+#endif
+#if PANEL_VARIANT < PANEL_4 || PANEL_VARIANT > PANEL_73_SPECTRA
+#error "PANEL_VARIANT must be one of PANEL_4, PANEL_57, PANEL_73_ACEP, PANEL_73_SPECTRA"
+#endif
+
+// ---- identity ---------------------------------------------------------------
+// device_id must match ^[a-z][a-z0-9_-]{1,31}$ . The server may hand back a
+// different id on MAC match (a re-flashed board); the firmware adopts it.
+#if PANEL_VARIANT == PANEL_4
+#define DEVICE_ID            "inky_frame_40"
+#define DEVICE_NAME          "Inky Frame 4.0"
+#define DEVICE_KIND          "pimoroni_inky_frame_40_acep"
+#elif PANEL_VARIANT == PANEL_57
+#define DEVICE_ID            "inky_frame_57"
+#define DEVICE_NAME          "Inky Frame 5.7"
+#define DEVICE_KIND          "pimoroni_inky_frame_57_acep"
+#elif PANEL_VARIANT == PANEL_73_ACEP
+#define DEVICE_ID            "inky_frame_73"
+#define DEVICE_NAME          "Inky Frame 7.3"
+#define DEVICE_KIND          "pimoroni_inky_frame_73_acep"
+#else
+#define DEVICE_ID            "inky_frame_73"
+#define DEVICE_NAME          "Inky Frame 7.3"
+#define DEVICE_KIND          "pimoroni_inky_frame_73"
+#endif
+
+// Palette indices in the panel's own order.
+#if PANEL_VARIANT == PANEL_73_SPECTRA
+#define DEVICE_GAMUT         "spectra_6"
+#define PAL_BLACK  0
+#define PAL_WHITE  1
+#define PAL_YELLOW 2
+#define PAL_RED    3
+#define PAL_BLUE   5
+#define PAL_GREEN  6
+#define PAL_COUNT  7
+#else
+// 7-colour ACeP: the same order on the UC8159 (4.0", 5.7") and AC073TC1A (7.3").
+#define DEVICE_GAMUT         "inky_7colour"
+#define PAL_BLACK  0
+#define PAL_WHITE  1
+#define PAL_GREEN  2
+#define PAL_BLUE   3
+#define PAL_RED    4
+#define PAL_YELLOW 5
+#define PAL_ORANGE 6
+#define PAL_COUNT  7
+#endif
+// Stock kind used if the catalog entry above is not installed on the server.
+// Its default panel is 1600x1200, so frames are refused until the admin sets
+// the panel size; the firmware logs this loudly.
+#define DEVICE_KIND_FALLBACK "pico_bin_client"
+
+// ---- panel geometry ---------------------------------------------------------
+// 4.0" = Landscape-native 640x400 buffer, 4 bpp, high nibble = left pixel.
+// 5.7" = Landscape-native 600x448 buffer, 4 bpp, high nibble = left pixel.
+// 7.3" = Landscape-native 800x480 buffer, 4 bpp, high nibble = left pixel.
+// PANEL_ROTATION is the turn the server applies from this buffer to the
+// dashboard (0/90/180/270). Verified on the bench with tools/make_test_frames.py:
+// standing on its legs, the buffer origin is the physical top-left and the
+// test triangle points left as generated, so no turn is needed. Read once at
+// registration; afterwards change it from Settings -> Devices -> Rotation.
+#if PANEL_VARIANT == PANEL_4
+#define PANEL_W              640
+#define PANEL_H              400
+#elif PANEL_VARIANT == PANEL_57
+#define PANEL_W              600
+#define PANEL_H              448
+#else
+#define PANEL_W              800
+#define PANEL_H              480
+#endif
+
+#define PANEL_ROTATION       0
+#define FRAME_BYTES          (PANEL_W * PANEL_H / 2)   // 128000 / 134400 / 192000
+#define ROW_BYTES            (PANEL_W / 2)             // 320 / 300 / 400
+
+// ---- frame store ------------------------------------------------------------
+// Frames are too big for the Pico's SRAM once Wi-Fi and TLS have theirs, so
+// they live in a frame store (src/store.c): the 7.3" carries 8 MB of SPI PSRAM;
+// the 4.0" and 5.7" have none and keep the store in a file on the microSD card,
+// which those frames therefore need. -DBOARD_HAS_PSRAM=0 tries the card store
+// on a 7.3" at the bench. The store's layout is at the end of this file.
+#ifndef BOARD_HAS_PSRAM
+#if PANEL_VARIANT == PANEL_73_ACEP || PANEL_VARIANT == PANEL_73_SPECTRA
+#define BOARD_HAS_PSRAM      1
+#else
+#define BOARD_HAS_PSRAM      0
+#endif
+#endif
+
+// ---- pins (Inky Frame, every size and revision) -----------------------------
+#define PIN_HOLD_VSYS_EN     2
+#define PIN_PSRAM_CS         3
+#define PIN_I2C_SDA          4
+#define PIN_I2C_SCL          5
+#define PIN_LED_ACTIVITY     6
+#define PIN_LED_CONNECTION   7
+#define PIN_SR_CLOCK         8
+#define PIN_SR_LATCH         9
+#define PIN_SR_OUT           10
+#define PIN_LED_A            11
+#define PIN_LED_B            12
+#define PIN_LED_C            13
+#define PIN_LED_D            14
+#define PIN_LED_E            15
+#define PIN_SPI_MISO         16
+#define PIN_EINK_CS          17
+#define PIN_SPI_SCK          18
+#define PIN_SPI_MOSI         19
+#define PIN_EINK_RESET       27
+#define PIN_EINK_DC          28
+#define PIN_VSYS_ADC         29     // Pico W: VSYS/3, ADC channel 3
+#define PIN_SD_CS            22     // microSD (SPI0, shared with the panel and PSRAM)
+
+// ---- buttons ----------------------------------------------------------------
+// Tesserae button action for each front button. Every press also carries its
+// letter as button_key ("a".."e"), which the server's button map checks first,
+// so each button can be bound on its own; a button with no action here ("")
+// goes by its letter alone.
+#define BUTTON_A_NAME        "left"
+#define BUTTON_B_NAME        ""
+#define BUTTON_C_NAME        "refresh"
+#define BUTTON_D_NAME        ""
+#define BUTTON_E_NAME        "right"
+// Hold Refresh (button C) as the frame wakes: this long opens the setup
+// portal, and this long wipes Wi-Fi, server and pairing (factory reset).
+#define BUTTON_SETUP_INDEX   2
+#define HOLD_SETUP_MS        5000
+#define HOLD_RESET_MS        20000
+
+// ---- setup portal -----------------------------------------------------------
+// The access point a fresh (or reset) frame opens: "<prefix>-XXXX", WPA2 with
+// this password, matching the ESP32 firmware's setup network.
+#define SETUP_AP_PREFIX      "Tesserae-Setup"
+#define SETUP_AP_PASSWORD    "tesserae"
+#define SETUP_PORTAL_URL     "http://192.168.4.1/"
+// On battery, close an unused portal and power off after this long.
+#define SETUP_IDLE_TIMEOUT_MS (15u * 60u * 1000u)
+
+// ---- flash layout -----------------------------------------------------------
+// The last four 4 KB sectors: two for the device state record (storage.c),
+// two below them for the portal settings (settings.c).
+#define FLASH_STATE_OFFSET    (PICO_FLASH_SIZE_BYTES - 2u * 4096u)
+#define FLASH_SETTINGS_OFFSET (PICO_FLASH_SIZE_BYTES - 4u * 4096u)
+// Where the firmware reads those sectors. On the RP2350 the image runs from an
+// A/B partition through address translation, so XIP_BASE is a window onto the
+// partition, not the whole flash; the untranslated alias reaches the sectors
+// wherever the image lives. (The SDK's flash erase/program take physical
+// offsets either way.)
+#if PICO_RP2350
+#define FLASH_READ_BASE       XIP_NOCACHE_NOALLOC_NOTRANSLATE_BASE
+#else
+#define FLASH_READ_BASE       XIP_BASE
+#endif
+
+// ---- sleep and retry --------------------------------------------------------
+// Bounds applied to server sleep values; the RTC alarm has no month field, so
+// the longest single sleep is 27 days.
+#define SLEEP_MIN_S          30
+#define SLEEP_MAX_S          (27 * 86400)
+#define SLEEP_DEFAULT_S      900
+// Escalating backoff when Wi-Fi or the server is unreachable (seconds).
+#define BACKOFF_STEPS_S      { 60, 120, 300, 900 }
+// While waiting for the admin to click Register, stay awake this long polling
+// /discover before falling back to deep-sleep retries.
+#define PAIRING_AWAKE_BUDGET_S 300
+
+// ---- network timeouts (ms) --------------------------------------------------
+#define WIFI_CONNECT_TIMEOUT_MS   15000
+#define WIFI_JOIN_ATTEMPTS        3
+#define MDNS_QUERY_TIMEOUT_MS     1500
+#define MDNS_QUERY_ATTEMPTS       3
+#define HTTP_TIMEOUT_DISCOVER_MS  10000
+#define HTTP_TIMEOUT_FRAME_MS     8000
+#define HTTP_TIMEOUT_FRAME_BUTTON_MS 30000   // a press: the server renders before it answers
+#define SLOW_RENDER_RETRY_S       30          // after a press the server was too slow to answer
+#define HTTP_TIMEOUT_STATUS_MS    10000
+#define HTTP_TIMEOUT_DOWNLOAD_MS  30000
+#define DOWNLOAD_STALL_TIMEOUT_MS 10000
+#define HTTP_BODY_MAX             (24 * 1024)   // JSON responses; larger bodies are truncated
+
+// ---- misc -------------------------------------------------------------------
+#define EPD_REFRESH_TIMEOUT_MS    50000
+#define WIFI_HOSTNAME             "inky-frame"
+
+// ---- over-the-air updates (RP2350 only; see src/ota.h) ----------------------
+// Downloaded images are staged in the frame store at OTA_PSRAM_OFFSET (below).
+#define OTA_DOWNLOAD_TIMEOUT_MS   120000
+// A trial boot must join Wi-Fi and confirm within this, or it reverts.
+#define OTA_TRIAL_DEADLINE_MS     90000
+#define OTA_WATCHDOG_MS           8000
+// On battery, refuse to install below this VSYS. The Frame reads the battery
+// through a diode, so this is about the ESP32 firmware's 3.6 V at the cell.
+#define OTA_MIN_VSYS_MV           3300
+
+// OTA logs (src/diag.h): the log this boot and the tail carried over a
+// reboot, uploaded tagged as an OTA log. The tail is kept in the frame store
+// at OTA_LOG_CARRY_PSRAM_OFFSET (below): PSRAM keeps its contents across a
+// reboot that does not drop power (the install's reboot, a trial that gives
+// up) but not across a battery sleep; the card store keeps it through both.
+#define OTA_LOG_CARRY_BYTES       (32u * 1024u)
+#define OTA_LOG_BODY_MAX          (60u * 1024u)   // under the server's 64 KB
+#define OTA_LOG_TIMEOUT_MS        6000
+
+// ---- cloud relay (src/relay.c) ----------------------------------------------
+#define RELAY_DEFAULT_URL         "https://relay.tesserae.ink"
+// Sealed frames are staged in the frame store at RELAY_PSRAM_OFFSET (below)
+// before they are opened into the frame at 0.
+
+// ---- SD card cache (src/cache.c) --------------------------------------------
+// Frames being downloaded to the card are staged in the frame store at
+// CACHE_PSRAM_OFFSET (below).
+// Album intervals are clamped like the sleep interval, as on the ESP32 firmware.
+#define ALBUM_MIN_INTERVAL_S      SLEEP_MIN_S
+#define ALBUM_MAX_INTERVAL_S      SLEEP_MAX_S
+#define ALBUM_DEFAULT_INTERVAL_S  SLEEP_DEFAULT_S
+
+// ---- frame store layout (src/store.c) ---------------------------------------
+// The frame itself is at 0; the regions below stage downloads that are not
+// yet frames. Every offset is in bytes from the start of the store.
+#if BOARD_HAS_PSRAM
+// 8 MB of PSRAM; the regions are spread out.
+#define STORE_BYTES                (8u * 1024u * 1024u)
+#define OTA_PSRAM_OFFSET           (1024u * 1024u)
+#define RELAY_PSRAM_OFFSET         (4u * 1024u * 1024u)
+#define CACHE_PSRAM_OFFSET         (6u * 1024u * 1024u)
+#define OTA_LOG_CARRY_PSRAM_OFFSET (7u * 1024u * 1024u)
+#else
+// A file on the microSD card; the regions follow each other, 4 KB aligned.
+// A frame region has room for a sealed relay frame (nonce and tag on top).
+#define STORE_ALIGN_4K(n)          (((n) + 4095u) & ~4095u)
+#define STORE_FRAME_REGION         STORE_ALIGN_4K(FRAME_BYTES + 4096u)
+#define RELAY_PSRAM_OFFSET         (1u * STORE_FRAME_REGION)
+#define CACHE_PSRAM_OFFSET         (2u * STORE_FRAME_REGION)
+#define OTA_LOG_CARRY_PSRAM_OFFSET (3u * STORE_FRAME_REGION)
+#define OTA_PSRAM_OFFSET           (OTA_LOG_CARRY_PSRAM_OFFSET + STORE_ALIGN_4K(16u + OTA_LOG_CARRY_BYTES))
+#if PICO_RP2350
+#define STORE_BYTES                (OTA_PSRAM_OFFSET + 2048u * 1024u)   // an A/B slot is 2036 KB
+#else
+#define STORE_BYTES                OTA_PSRAM_OFFSET                     // no OTA on the RP2040
+#endif
+#endif
